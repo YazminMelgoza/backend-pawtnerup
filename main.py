@@ -1,6 +1,13 @@
 from flask import Flask, jsonify
 from firebase_admin import credentials, firestore, initialize_app
-from difflib import SequenceMatcher
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.preprocessing import OneHotEncoder
+from sklearn.neighbors import NearestNeighbors
+from scipy.sparse import hstack
+import pandas as pd
+import numpy as np
+import random
+
 
 app = Flask(__name__)
 
@@ -13,104 +20,139 @@ db = firestore.client()
 def hello_world():
     return '<h1>Hello, World!</h1>'
 
-# in route of a user id
 @app.route('/recommendations/<userId>', methods=['GET'])
 def user(userId):
-    # get user data from firestore
-    user = db.collection('users').document(userId).get().to_dict()
+        # Simulate user data
+        user = {'id': userId, 'name': f'User{userId}'}
+        
+        # Simulate user preferences
+        preferences = {
+            'type': 'dog',
+            'size': 'medium',
+            'sex': 'male',
+            'breed': 'breed2',
+            'colors': ['black', 'white'],
+            'features': ['friendly', 'playful']
+        }
+        
+        # Generate pets data for testing
+        pets = generate_pets_data(40)
+        # Preprocess pets data
+        pets_df, tfidf_vectorizer, categorical_columns = preprocess_data(pets)
 
-    # get a snapshot of the pets collection
-    pets = db.collection('pets').get()
-    pets = [pet.to_dict() for pet in pets]
 
-    # get user preferences
-    preferences = db.collection('preferences').document(userId).get().to_dict()
 
-    if preferences is None:
-        return jsonify({'error': 'No preferences found'}), 500
+        # Get recommendations
+        recommendations = get_recommendations(preferences, pets)
 
-    # get recommendations
-    recommendations = get_recommendations(preferences, pets)
+        if not recommendations:
+            return jsonify({'error': 'No recommendations found'}), 404
 
-    if recommendations is None:
-        return jsonify({'error': 'No recommendations found'}), 500
+        return jsonify(recommendations)
 
-    return jsonify(recommendations)
 
+def preprocess_data(pets):
+    # Convert the data to a DataFrame
+    df = pd.DataFrame(pets)
+    
+    # One-hot encode categorical features
+    categorical_features = ['type', 'size', 'sex']
+    df_categorical = pd.get_dummies(df[categorical_features])
+    
+    # Use TfidfVectorizer for 'breed', 'colors' and 'features'
+    tfidf_vectorizer = TfidfVectorizer()
+    
+    breeds_features = df['breed'].apply(lambda x: ' '.join([x]))
+    colors_features = df['colors'].apply(lambda x: ' '.join(x))
+    features_features = df['features'].apply(lambda x: ' '.join(x))
+    
+    tfidf_breeds = tfidf_vectorizer.fit_transform(breeds_features)
+    tfidf_colors = tfidf_vectorizer.fit_transform(colors_features)
+    tfidf_features = tfidf_vectorizer.fit_transform(features_features)
+    
+    # Combine all features into a single matrix
+    combined_features = hstack([df_categorical, tfidf_breeds, tfidf_colors, tfidf_features])
+
+    # print the shape of the combined features
+    print(combined_features.shape)
+    print(df_categorical.columns)
+    print(tfidf_vectorizer.get_feature_names_out())
+
+    
+    print(combined_features)
+    print(tfidf_vectorizer)
+    print(df_categorical.columns)
+    return combined_features, tfidf_vectorizer, df_categorical.columns
+
+def preprocess_preferences(preferences, tfidf_vectorizer, categorical_columns):
+    # Convert the preferences to a DataFrame with each preference as a column
+
+    df = pd.DataFrame([preferences])
+
+    empty_df = pd.DataFrame(columns=categorical_columns)
+
+    for column in categorical_columns:
+        empty_df[column] = 0 if column.split('_')[1] != preferences[column.split('_')[0]] else 1
+
+    print(df)
+    # Use TfidfVectorizer for 'breed', 'colors' and 'features'
+    breeds_features = tfidf_vectorizer.transform(df['breed'].apply(lambda x: ' '.join([x])))
+    colors_features = tfidf_vectorizer.transform(df['colors'].apply(lambda x: ' '.join(x)))
+    features_features = tfidf_vectorizer.transform(df['features'].apply(lambda x: ' '.join(x)))
+    
+    combined_features = hstack([empty_df, breeds_features, colors_features, features_features])
+    print(combined_features)
+    
+    return combined_features
 
 def get_recommendations(preferences, pets):
-    # for each pet, calculate a match score
-    for pet in pets:
-        print(pet)
-        pet['score'] = score_pet(pet, preferences)
-    # sort pets by match score
-    pets.sort(key=lambda pet: pet['score'], reverse=True)
+    # Preprocess pets data
+    pets_df, tfidf_vectorizer, categorical_columns = preprocess_data(pets)
+    
+    # Preprocess preferences data
+    preferences_df = preprocess_preferences(preferences, tfidf_vectorizer, categorical_columns)
+    
+    
+    # Train KNN model
+    knn = NearestNeighbors(n_neighbors=10, metric='cosine')
+    knn.fit(pets_df)
+    
+    # Find the top 10 recommendations
+    distances, indices = knn.kneighbors(preferences_df)
+    recommendations = [pets[i] for i in indices[0]]
+    
+    return recommendations
+
+def generate_pets_data(n=40):
+    pet_types = ['cat', 'dog']
+    sizes = ['small', 'medium', 'large']
+    sexes = ['male', 'female']
+    breeds = ['breed1', 'breed2', 'breed3', 'breed4', 'breed5', 'randomBreed1', 'randomBreed2']
+    colors = ['black', 'white', 'brown', 'gray', 'golden']
+    features = ['friendly', 'playful', 'calm', 'energetic', 'quiet']
+    
+    pets = []
+    
+    for i in range(n):
+        pet = {
+            'id': f'pet{i}',
+            'name': f'Pet{i}',
+            'type': random.choice(pet_types),
+            'sex': random.choice(sexes),
+            'ageInYears': random.randint(1, 10),
+            'size': random.choice(sizes),
+            'breed': random.choice(breeds),
+            'features': random.sample(features, k=random.randint(1, len(features))),
+            'colors': random.sample(colors, k=random.randint(1, len(colors))),
+            'imageURLs': [f'http://example.com/image{i}.jpg'],
+            'shelterId': f'shelter{random.randint(1, 5)}',
+            'adoptionStatus': 'available',
+            'story': f'This is the story of Pet{i}.',
+            'publishedAt': random.randint(1609459200, 1672531199)  # Timestamps for the year 2021
+        }
+        pets.append(pet)
+    
     return pets
-
-def score_pet(pet, preferences):
-    
-    scores = []
-    if preferences['type'] is not None:
-        scores.append(score_type(pet, preferences))
-    if preferences['size'] is not None:
-        scores.append(score_size(pet, preferences))
-    if preferences['breed'] is not None:
-        scores.append(score_breed(pet, preferences))
-    if preferences['colors'] is not None:
-        scores.append(score_colors(pet, preferences))
-    if preferences['features'] is not None:
-        scores.append(score_features(pet, preferences))
-    return sum(scores) / len(scores)
-
-def score_type(pet, preference):
-    # return 1 if pet type matches preference type, 0 otherwise
-    return 1 if isSimilar(pet['type'], preference['type']) else 0
-
-def score_size(pet, preference):
-    # return 1 if pet size matches preference size, 0 otherwise
-    # use isSimilar function to compare strings
-    return 1 if isSimilar(pet['size'], preference['size']) else 0
-
-
-def score_breed(pet, preference):   
-    # return 1 if pet breed matches preference breed, 0 otherwise
-    # use isSimilar function to compare strings
-    return 1 if isSimilar(pet['breed'], preference['breed']) else 0
-
-def score_colors(pet, preference):
-    # return 1 if pet colors match preference colors, 0 otherwise
-    # use isSimilar function to compare strings
-    # calculate the average of all colors
-    score = 0
-    for color in pet['colors']:
-        score += max([isSimilar(color, pref_color) for pref_color in preference['colors']])
-    return score / len(preference['colors'])
-
-def score_features(pet, preference):
-    score = 0
-    for feature in pet['features']:
-        score += max([isSimilar(feature, pref_feature) for pref_feature in preference['features']])
-    return score / len(preference['features'])
-
-def normalize_string(value):
-    temp = value.lower().strip()
-    normal_chars = {
-        'á': 'a',
-        'é': 'e',
-        'í': 'i',
-        'ó': 'o',
-        'ú': 'u',
-        'ü': 'u',
-        'ñ': 'n'
-    }
-    for special_char, normal_char in normal_chars.items():
-        temp = temp.replace(special_char, normal_char)
-    return temp
-    
-def isSimilar(word, target):
-    word = normalize_string(word)
-    target = normalize_string(target)
-    return SequenceMatcher(None, word, target).ratio() > 0.8
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
