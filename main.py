@@ -1,8 +1,6 @@
-
-from flask import Flask, request, jsonify
+from flask import Flask, jsonify
 from firebase_admin import credentials, firestore, initialize_app
 from difflib import SequenceMatcher
-
 
 app = Flask(__name__)
 
@@ -29,67 +27,27 @@ def user(userId):
     preferences = db.collection('preferences').document(userId).get().to_dict()
 
     if preferences is None:
-        return jsonify({'error': 'User preferences not found'}), 404
+        return jsonify({'error': 'No preferences found'}), 500
 
     # get recommendations
     recommendations = get_recommendations(preferences, pets)
 
     if recommendations is None:
-        return jsonify({'error': 'No recommendations found'}), 404
+        return jsonify({'error': 'No recommendations found'}), 500
 
-    return '<h1>Hello, User {}!</h1>'.format(user['name'])
+    return jsonify(recommendations)
 
 
 def get_recommendations(preferences, pets):
-    # Preferences are a dictionary of preferences
-    # Pets is a list of dictionaries of pets
-    # preferences properties:
-    # type: 'cat' or 'dog'
-    # size: 'small', 'medium', 'large'
-    # breed: string
-    # colors: (list of strings)
-    # features: (list of strings)
-    # sex: 'male' or 'female'
-    # if a preference is not specified, it is None, and should be ignored
-
-    # return a list of pets in order of match to preferences
-
-#     class PetModel {
-#   String id;
-#   String name;
-#   String type;
-#   String sex;
-#   int? ageInYears;
-#   String size;
-#   String breed;
-#   List<String> features;
-#   List<String> colors;
-#   List<String> imageURLs;
-#   String shelterId;
-#   String adoptionStatus;
-#   String? story;
-#   int publishedAt;
-
     # for each pet, calculate a match score
     for pet in pets:
+        print(pet)
         pet['score'] = score_pet(pet, preferences)
     # sort pets by match score
     pets.sort(key=lambda pet: pet['score'], reverse=True)
-
-
+    return pets
 
 def score_pet(pet, preferences):
-    # calculate a match score for a pet based on preferences
-    # return a score between 0 and 1
-
-    # for each preference, calculate a score
-    # return the average of all scores
-
-    # type: 'cat' or 'dog'
-    # size: 'small', 'medium', 'large'
-    # breed: string
-    # colors: (list of strings)
-    # features: (list
     
     scores = []
     if preferences['type'] is not None:
@@ -129,21 +87,13 @@ def score_colors(pet, preference):
     return score / len(preference['colors'])
 
 def score_features(pet, preference):
-    # return 1 if pet features match preference features, 0 otherwise
-    # use isSimilar function to compare strings
-    # calculate the average of all features
     score = 0
     for feature in pet['features']:
         score += max([isSimilar(feature, pref_feature) for pref_feature in preference['features']])
     return score / len(preference['features'])
 
-
-
-
 def normalize_string(value):
-    # lower, strip and normalize special characters
     temp = value.lower().strip()
-    # subsitute special characters with its corresponding normal character
     normal_chars = {
         'á': 'a',
         'é': 'e',
@@ -156,17 +106,11 @@ def normalize_string(value):
     for special_char, normal_char in normal_chars.items():
         temp = temp.replace(special_char, normal_char)
     return temp
-
-
     
 def isSimilar(word, target):
     word = normalize_string(word)
     target = normalize_string(target)
     return SequenceMatcher(None, word, target).ratio() > 0.8
-
-
-    
-
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
