@@ -1,7 +1,6 @@
 from flask import Flask, jsonify
 from firebase_admin import credentials, firestore, initialize_app
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.preprocessing import OneHotEncoder
 from sklearn.neighbors import NearestNeighbors
 from scipy.sparse import hstack
 import pandas as pd
@@ -22,33 +21,31 @@ def hello_world():
 
 @app.route('/recommendations/<userId>', methods=['GET'])
 def user(userId):
-        # Simulate user data
-        user = {'id': userId, 'name': f'User{userId}'}
-        
-        # Simulate user preferences
-        preferences = {
-            'type': 'dog',
-            'size': 'medium',
-            'sex': 'male',
-            'breed': 'breed2',
-            'colors': ['black', 'white'],
-            'features': ['friendly', 'playful']
-        }
-        
-        # Generate pets data for testing
-        pets = generate_pets_data(40)
-        # Preprocess pets data
-        pets_df, tfidf_vectorizer, categorical_columns = preprocess_data(pets)
+    # Simulate user data
+    user = {'id': userId, 'name': f'User{userId}'}
+    
+    # Simulate user preferences
+    preferences = {
+        'type': 'dog',
+        'size': 'medium',
+        'sex': 'male',
+        'breed': 'breed2',
+        'colors': ['black', 'white'],
+        'features': ['friendly', 'playful']
+    }
+    
+    # Generate pets data for testing
+    pets = generate_pets_data(40)
+    # Preprocess pets data
+    pets_df, tfidf_vectorizers, categorical_columns = preprocess_data(pets)
+    
+    # Get recommendations
+    recommendations = get_recommendations(preferences, pets, tfidf_vectorizers, categorical_columns)
 
+    if not recommendations:
+        return jsonify({'error': 'No recommendations found'}), 404
 
-
-        # Get recommendations
-        recommendations = get_recommendations(preferences, pets)
-
-        if not recommendations:
-            return jsonify({'error': 'No recommendations found'}), 404
-
-        return jsonify(recommendations)
+    return jsonify(recommendations)
 
 
 def preprocess_data(pets):
@@ -59,59 +56,59 @@ def preprocess_data(pets):
     categorical_features = ['type', 'size', 'sex']
     df_categorical = pd.get_dummies(df[categorical_features])
     
-    # Use TfidfVectorizer for 'breed', 'colors' and 'features'
-    tfidf_vectorizer = TfidfVectorizer()
-    
+    # Create TfidfVectorizer for 'breed', 'colors' and 'features' with a fixed vocabulary
+    tfidf_vectorizer_breeds = TfidfVectorizer()
+    tfidf_vectorizer_colors = TfidfVectorizer()
+    tfidf_vectorizer_features = TfidfVectorizer()
+
     breeds_features = df['breed'].apply(lambda x: ' '.join([x]))
     colors_features = df['colors'].apply(lambda x: ' '.join(x))
     features_features = df['features'].apply(lambda x: ' '.join(x))
-    
-    tfidf_breeds = tfidf_vectorizer.fit_transform(breeds_features)
-    tfidf_colors = tfidf_vectorizer.fit_transform(colors_features)
-    tfidf_features = tfidf_vectorizer.fit_transform(features_features)
+
+    tfidf_breeds = tfidf_vectorizer_breeds.fit_transform(breeds_features)
+    tfidf_colors = tfidf_vectorizer_colors.fit_transform(colors_features)
+    tfidf_features = tfidf_vectorizer_features.fit_transform(features_features)
     
     # Combine all features into a single matrix
     combined_features = hstack([df_categorical, tfidf_breeds, tfidf_colors, tfidf_features])
 
-    # print the shape of the combined features
-    print(combined_features.shape)
-    print(df_categorical.columns)
-    print(tfidf_vectorizer.get_feature_names_out())
+    tfidf_vectorizers = {
+        'breeds': tfidf_vectorizer_breeds,
+        'colors': tfidf_vectorizer_colors,
+        'features': tfidf_vectorizer_features
+    }
 
-    
-    print(combined_features)
-    print(tfidf_vectorizer)
-    print(df_categorical.columns)
-    return combined_features, tfidf_vectorizer, df_categorical.columns
+    return combined_features, tfidf_vectorizers, df_categorical.columns
 
-def preprocess_preferences(preferences, tfidf_vectorizer, categorical_columns):
+def preprocess_preferences(preferences, tfidf_vectorizers, categorical_columns):
     # Convert the preferences to a DataFrame with each preference as a column
-
-    df = pd.DataFrame([preferences])
-
-    empty_df = pd.DataFrame(columns=categorical_columns)
-
-    for column in categorical_columns:
-        empty_df[column] = 0 if column.split('_')[1] != preferences[column.split('_')[0]] else 1
-
-    print(df)
-    # Use TfidfVectorizer for 'breed', 'colors' and 'features'
-    breeds_features = tfidf_vectorizer.transform(df['breed'].apply(lambda x: ' '.join([x])))
-    colors_features = tfidf_vectorizer.transform(df['colors'].apply(lambda x: ' '.join(x)))
-    features_features = tfidf_vectorizer.transform(df['features'].apply(lambda x: ' '.join(x)))
+    preferences_df = pd.DataFrame([preferences])
     
-    combined_features = hstack([empty_df, breeds_features, colors_features, features_features])
-    print(combined_features)
+    # One-hot encode the categorical features
+    df_categorical = pd.get_dummies(preferences_df[['type', 'size', 'sex']])
+    
+    # Ensure all categorical columns are present
+    for col in categorical_columns:
+        if col not in df_categorical.columns:
+            df_categorical[col] = 0
+
+    df_categorical = df_categorical[categorical_columns]
+    
+    # Use TfidfVectorizer for 'breed', 'colors' and 'features'
+    breeds_features = tfidf_vectorizers['breeds'].transform(preferences_df['breed'].apply(lambda x: ' '.join([x])))
+    colors_features = tfidf_vectorizers['colors'].transform(preferences_df['colors'].apply(lambda x: ' '.join(x)))
+    features_features = tfidf_vectorizers['features'].transform(preferences_df['features'].apply(lambda x: ' '.join(x)))
+    
+    combined_features = hstack([df_categorical, breeds_features, colors_features, features_features])
     
     return combined_features
 
-def get_recommendations(preferences, pets):
+def get_recommendations(preferences, pets, tfidf_vectorizers, categorical_columns):
     # Preprocess pets data
-    pets_df, tfidf_vectorizer, categorical_columns = preprocess_data(pets)
+    pets_df, tfidf_vectorizers, categorical_columns = preprocess_data(pets)
     
     # Preprocess preferences data
-    preferences_df = preprocess_preferences(preferences, tfidf_vectorizer, categorical_columns)
-    
+    preferences_df = preprocess_preferences(preferences, tfidf_vectorizers, categorical_columns)
     
     # Train KNN model
     knn = NearestNeighbors(n_neighbors=10, metric='cosine')
