@@ -4,7 +4,6 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.neighbors import NearestNeighbors
 from scipy.sparse import hstack
 import pandas as pd
-import numpy as np
 import random
 
 
@@ -21,23 +20,20 @@ def hello_world():
 
 @app.route('/recommendations/<userId>', methods=['GET'])
 def user(userId):
-    # Simulate user data
-    user = {'id': userId, 'name': f'User{userId}'}
-    
     # Simulate user preferences
-    preferences = {
-        'type': 'dog',
-        'size': 'medium',
-        'sex': 'male',
-        'breed': 'breed2',
-        'colors': ['black', 'white'],
-        'features': ['friendly', 'playful']
-    }
+    preferences_doc = db.collection('preferences').document(userId).get()
+    if preferences_doc.exists:
+        preferences = preferences_doc.to_dict()
+    else:
+        return jsonify({'error': 'User not found'}), 404
     
     # Generate pets data for testing
-    pets = generate_pets_data(40)
+    pets = get_pets()
+    
     # Preprocess pets data
     pets_df, tfidf_vectorizers, categorical_columns = preprocess_data(pets)
+
+    print(pets_df)
     
     # Get recommendations
     recommendations = get_recommendations(preferences, pets, tfidf_vectorizers, categorical_columns)
@@ -45,7 +41,7 @@ def user(userId):
     if not recommendations:
         return jsonify({'error': 'No recommendations found'}), 404
 
-    return jsonify(recommendations)
+    return jsonify(recommendations), 200
 
 
 def preprocess_data(pets):
@@ -111,7 +107,10 @@ def get_recommendations(preferences, pets, tfidf_vectorizers, categorical_column
     preferences_df = preprocess_preferences(preferences, tfidf_vectorizers, categorical_columns)
     
     # Train KNN model
-    knn = NearestNeighbors(n_neighbors=10, metric='cosine')
+    number_of_neighbors = 10
+    if pets_df.shape[0] < number_of_neighbors:
+        number_of_neighbors = pets_df.shape[0]
+    knn = NearestNeighbors(n_neighbors=number_of_neighbors, metric='cosine')
     knn.fit(pets_df)
     
     # Find the top 10 recommendations
@@ -150,6 +149,13 @@ def generate_pets_data(n=40):
         pets.append(pet)
     
     return pets
+
+
+def get_pets():
+    pets_ref = db.collection('pets').where('adoptionStatus', '==', 'available')
+    pets = pets_ref.get()
+    pets_list = [pet.to_dict() for pet in pets]
+    return pets_list
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
